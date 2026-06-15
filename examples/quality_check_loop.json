@@ -1,0 +1,39 @@
+{
+  "name": "quality_check_loop",
+  "version": "0.1.0",
+  "description": "Content generation with quality check and retry loop",
+  "root": {
+    "type": "sequence",
+    "steps": [
+      {
+        "type": "agent",
+        "agent": "content_generator"
+      },
+      {
+        "type": "loop",
+        "max_iterations": 5,
+        "body": {
+          "type": "sequence",
+          "steps": [
+            {
+              "type": "agent",
+              "agent": "quality_checker"
+            },
+            {
+              "type": "condition",
+              "expression": "output.quality_score >= 0.8",
+              "true_branch": {
+                "type": "agent",
+                "agent": "finalizer"
+              },
+              "false_branch": {
+                "type": "agent",
+                "agent": "content_improver"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

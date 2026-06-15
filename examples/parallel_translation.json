@@ -1,0 +1,35 @@
+{
+  "name": "parallel_translation",
+  "version": "0.1.0",
+  "description": "Extract text, translate in parallel, then merge results",
+  "root": {
+    "type": "sequence",
+    "steps": [
+      {
+        "type": "agent",
+        "agent": "extractor"
+      },
+      {
+        "type": "parallel",
+        "branches": [
+          {
+            "type": "agent",
+            "agent": "translator_en"
+          },
+          {
+            "type": "agent",
+            "agent": "translator_zh"
+          },
+          {
+            "type": "agent",
+            "agent": "translator_ja"
+          }
+        ]
+      },
+      {
+        "type": "agent",
+        "agent": "merger"
+      }
+    ]
+  }
+}
