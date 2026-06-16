@@ -356,3 +356,237 @@ class TestCompilationResult:
         )
         assert not result.success
         assert len(result.errors) == 1
+
+
+# ---- Test: ADK Compiler with AgentConfig (model/instruction injection) ----
+
+class TestADKCompilerWithAgentConfig:
+    """Test agent configuration injection into compiled code."""
+
+    def test_compile_with_agent_model(self):
+        """AgentConfig.model should appear in generated code."""
+        from agentir.llm.config import AgentConfig
+
+        compiler = ADKCompiler()
+        wf = WorkflowDefinition(
+            name="model_test",
+            root=AgentNode(agent="researcher"),
+        )
+        configs = {
+            "researcher": AgentConfig(
+                agent_name="researcher",
+                model="deepseek-chat",
+                instruction="You research topics.",
+            ),
+        }
+        result = compiler.compile(wf, agent_configs=configs)
+        assert result.success
+        assert "model=\"deepseek-chat\"" in result.source_code
+        assert "You research topics." in result.source_code
+        compile(result.source_code, "<generated>", "exec")
+
+    def test_compile_with_agent_tools(self):
+        """AgentConfig.tools should appear in generated code."""
+        from agentir.llm.config import AgentConfig
+
+        compiler = ADKCompiler()
+        wf = WorkflowDefinition(
+            name="tools_test",
+            root=AgentNode(agent="assistant"),
+        )
+        configs = {
+            "assistant": AgentConfig(
+                agent_name="assistant",
+                model="gpt-4o",
+                instruction="You are helpful.",
+                tools=["google_search", "calculator"],
+            ),
+        }
+        result = compiler.compile(wf, agent_configs=configs)
+        assert result.success
+        assert "tools=[" in result.source_code
+        assert "google_search" in result.source_code
+        assert "calculator" in result.source_code
+        compile(result.source_code, "<generated>", "exec")
+
+    def test_compile_with_agent_temperature(self):
+        """AgentConfig.temperature should appear in generated code."""
+        from agentir.llm.config import AgentConfig
+
+        compiler = ADKCompiler()
+        wf = WorkflowDefinition(
+            name="temp_test",
+            root=AgentNode(agent="creative"),
+        )
+        configs = {
+            "creative": AgentConfig(
+                agent_name="creative",
+                model="deepseek-chat",
+                temperature=0.9,
+            ),
+        }
+        result = compiler.compile(wf, agent_configs=configs)
+        assert result.success
+        assert "temperature=0.9" in result.source_code
+        compile(result.source_code, "<generated>", "exec")
+
+    def test_compile_multiple_agents_with_configs(self):
+        """Each agent should get its own model and instruction."""
+        from agentir.llm.config import AgentConfig
+
+        compiler = ADKCompiler()
+        wf = WorkflowDefinition(
+            name="multi_agent",
+            root=SequenceNode(steps=[
+                AgentNode(agent="researcher"),
+                AgentNode(agent="writer"),
+            ]),
+        )
+        configs = {
+            "researcher": AgentConfig(
+                agent_name="researcher",
+                model="deepseek-chat",
+                instruction="Research deeply.",
+            ),
+            "writer": AgentConfig(
+                agent_name="writer",
+                model="deepseek-reasoner",
+                instruction="Write eloquently.",
+            ),
+        }
+        result = compiler.compile(wf, agent_configs=configs)
+        assert result.success
+        assert 'model="deepseek-chat"' in result.source_code
+        assert 'model="deepseek-reasoner"' in result.source_code
+        assert "Research deeply." in result.source_code
+        assert "Write eloquently." in result.source_code
+        compile(result.source_code, "<generated>", "exec")
+
+    def test_compile_without_agent_configs_uses_defaults(self):
+        """Without AgentConfig, should use compiler defaults."""
+        compiler = ADKCompiler(
+            default_model="gemini-2.0-flash",
+            default_instruction_template="I am {agent_name}.",
+        )
+        wf = WorkflowDefinition(
+            name="defaults_test",
+            root=AgentNode(agent="helper"),
+        )
+        result = compiler.compile(wf)
+        assert result.success
+        assert 'model="gemini-2.0-flash"' in result.source_code
+        assert "I am helper." in result.source_code
+        compile(result.source_code, "<generated>", "exec")
+
+    def test_compile_partial_configs_falls_back_to_defaults(self):
+        """Agents without configs should get defaults."""
+        from agentir.llm.config import AgentConfig
+
+        compiler = ADKCompiler()
+        wf = WorkflowDefinition(
+            name="partial_test",
+            root=SequenceNode(steps=[
+                AgentNode(agent="configured"),
+                AgentNode(agent="not_configured"),
+            ]),
+        )
+        configs = {
+            "configured": AgentConfig(
+                agent_name="configured",
+                model="deepseek-chat",
+                instruction="Custom instruction.",
+            ),
+        }
+        result = compiler.compile(wf, agent_configs=configs)
+        assert result.success
+        assert 'model="deepseek-chat"' in result.source_code
+        assert "Custom instruction." in result.source_code
+        # not_configured gets default
+        assert 'model="gemini-2.0-flash"' in result.source_code
+        compile(result.source_code, "<generated>", "exec")
+
+    def test_compile_no_tools_field_when_empty(self):
+        """When tools list is empty, tools= should NOT appear in output."""
+        from agentir.llm.config import AgentConfig
+
+        compiler = ADKCompiler()
+        wf = WorkflowDefinition(
+            name="no_tools_test",
+            root=AgentNode(agent="basic"),
+        )
+        result = compiler.compile(wf)  # No agent_configs at all
+        assert "tools=" not in result.source_code
+        compile(result.source_code, "<generated>", "exec")
+
+    def test_compile_no_temperature_field_when_none(self):
+        """When temperature is None, it should NOT appear in output."""
+        from agentir.llm.config import AgentConfig
+
+        compiler = ADKCompiler()
+        wf = WorkflowDefinition(
+            name="no_temp_test",
+            root=AgentNode(agent="basic"),
+        )
+        configs = {
+            "basic": AgentConfig(agent_name="basic", model="gpt-4o", temperature=None),
+        }
+        result = compiler.compile(wf, agent_configs=configs)
+        assert "temperature=" not in result.source_code
+        compile(result.source_code, "<generated>", "exec")
+
+    def test_full_pipeline_with_agent_configs(self):
+        """NL → Planner → AgentIR → ADK Compiler (with agent configs) → valid Python."""
+        from agentir.llm.config import AgentConfig
+
+        compiler = ADKCompiler()
+        wf = WorkflowDefinition(
+            name="full_pipeline",
+            description="End-to-end with agent configs",
+            root=SequenceNode(steps=[
+                AgentNode(agent="researcher"),
+                ConditionNode(
+                    expression="output.needs_review",
+                    true_branch=LoopNode(
+                        max_iterations=3,
+                        body=AgentNode(agent="reviewer"),
+                    ),
+                    false_branch=AgentNode(agent="writer"),
+                ),
+                AgentNode(agent="publisher"),
+            ]),
+        )
+        configs = {
+            "researcher": AgentConfig(
+                agent_name="researcher", model="deepseek-chat",
+                instruction="You are a researcher.", temperature=0.3,
+            ),
+            "reviewer": AgentConfig(
+                agent_name="reviewer", model="deepseek-chat",
+                instruction="You are a reviewer.", temperature=0.1,
+            ),
+            "writer": AgentConfig(
+                agent_name="writer", model="deepseek-reasoner",
+                instruction="You are a writer.", temperature=0.5,
+            ),
+            "publisher": AgentConfig(
+                agent_name="publisher", model="deepseek-chat",
+                instruction="You are a publisher.", tools=["publish_api"],
+            ),
+        }
+        result = compiler.compile(wf, agent_configs=configs)
+        assert result.success
+
+        # Verify all agents have their configs
+        assert 'model="deepseek-chat"' in result.source_code
+        assert 'model="deepseek-reasoner"' in result.source_code
+        assert "You are a researcher." in result.source_code
+        assert "You are a reviewer." in result.source_code
+        assert "You are a writer." in result.source_code
+        assert "You are a publisher." in result.source_code
+        assert "temperature=0.3" in result.source_code
+        assert "temperature=0.1" in result.source_code
+        assert "temperature=0.5" in result.source_code
+        assert "publish_api" in result.source_code
+
+        # Must be valid Python
+        compile(result.source_code, "<generated>", "exec")

@@ -103,10 +103,28 @@ class LoopNode(BaseModel):
     body: WorkflowNode = Field(..., description="Workflow node to execute in the loop")
 
 
+class ToolNode(BaseModel):
+    """Invokes a user-defined Python tool as a workflow node.
+
+    Tools are Python scripts in the ``tools/`` directory. Each tool is
+    a standard async function (by convention named ``execute``) that
+    the system discovers and wraps as an ADK @node function.
+
+    Example:
+        {
+            "type": "tool",
+            "tool": "web_search"
+        }
+    """
+
+    type: Literal["tool"] = "tool"
+    tool: str = Field(..., description="Name of the tool to invoke (matches registry)")
+
+
 # ---- Discriminated Union ----
 
 WorkflowNode = Annotated[
-    AgentNode | SequenceNode | ParallelNode | ConditionNode | LoopNode,
+    AgentNode | SequenceNode | ParallelNode | ConditionNode | LoopNode | ToolNode,
     Field(discriminator="type"),
 ]
 

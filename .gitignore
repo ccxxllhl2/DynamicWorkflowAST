@@ -9,6 +9,12 @@ build/
 .venv/
 venv/
 
+# Environment (secrets)
+.env
+
+# Generated Artifacts
+artifacts/
+
 # IDE
 .idea/
 .vscode/

@@ -16,8 +16,10 @@ from agentir.ir.nodes import (
     LoopNode,
     ParallelNode,
     SequenceNode,
+    ToolNode,
     WorkflowNode,
 )
+from agentir.tools.registry import ToolRegistry
 
 
 @dataclass
@@ -69,6 +71,8 @@ def _walk_nodes(
         errors.extend(_walk_nodes(node.false_branch, visitor, f"{path}.false_branch"))
     elif isinstance(node, LoopNode):
         errors.extend(_walk_nodes(node.body, visitor, f"{path}.body"))
+    elif isinstance(node, ToolNode):
+        pass  # Leaf node, no children
 
     return errors
 
@@ -139,13 +143,32 @@ def validate_condition_expression(
     return _walk_nodes(workflow.root, check)
 
 
+def validate_tool_existence(
+    workflow: WorkflowDefinition, registry: ToolRegistry
+) -> list[ValidationError]:
+    """Validate that all referenced tools exist in the registry."""
+
+    def check(node: WorkflowNode, path: str) -> list[ValidationError]:
+        if isinstance(node, ToolNode) and not registry.has(node.tool):
+            return [
+                ValidationError(
+                    code="TOOL_NOT_FOUND",
+                    message=f"Tool '{node.tool}' is not registered",
+                    path=path,
+                )
+            ]
+        return []
+
+    return _walk_nodes(workflow.root, check)
+
+
 def validate_max_depth(
     workflow: WorkflowDefinition, max_depth: int = 20
 ) -> list[ValidationError]:
     """Validate that workflow nesting does not exceed max_depth."""
 
     def measure_depth(node: WorkflowNode) -> int:
-        if isinstance(node, AgentNode):
+        if isinstance(node, (AgentNode, ToolNode)):
             return 1
         if isinstance(node, SequenceNode):
             return 1 + max((measure_depth(s) for s in node.steps), default=0)

@@ -18,7 +18,9 @@ from agentir.validator.rules import (
     validate_condition_expression,
     validate_max_depth,
     validate_no_empty_containers,
+    validate_tool_existence,
 )
+from agentir.tools.registry import ToolRegistry
 
 
 @dataclass
@@ -47,6 +49,7 @@ class ValidationReport:
 def validate_workflow(
     workflow: WorkflowDefinition,
     agent_registry: AgentRegistry | None = None,
+    tool_registry: ToolRegistry | None = None,
     max_depth: int = 20,
 ) -> ValidationReport:
     """Run all validation rules on a workflow.
@@ -54,6 +57,7 @@ def validate_workflow(
     Args:
         workflow: The workflow to validate.
         agent_registry: Optional registry of available agents.
+        tool_registry: Optional registry of available tools.
         max_depth: Maximum allowed nesting depth.
 
     Returns:
@@ -70,6 +74,10 @@ def validate_workflow(
     if agent_registry is not None:
         errors.extend(validate_agent_existence(workflow, agent_registry))
 
+    # Tool existence (only if registry is provided)
+    if tool_registry is not None:
+        errors.extend(validate_tool_existence(workflow, tool_registry))
+
     return ValidationReport(
         is_valid=len(errors) == 0,
         errors=errors,
@@ -79,6 +87,7 @@ def validate_workflow(
 def validate_workflow_dict(
     data: dict,
     agent_registry: AgentRegistry | None = None,
+    tool_registry: ToolRegistry | None = None,
     max_depth: int = 20,
 ) -> ValidationReport:
     """Validate a workflow from a raw dictionary.
@@ -100,12 +109,13 @@ def validate_workflow_dict(
             )
         return ValidationReport(is_valid=False, errors=pydantic_errors)
 
-    return validate_workflow(workflow, agent_registry, max_depth)
+    return validate_workflow(workflow, agent_registry, tool_registry, max_depth)
 
 
 def validate_workflow_json(
     json_str: str,
     agent_registry: AgentRegistry | None = None,
+    tool_registry: ToolRegistry | None = None,
     max_depth: int = 20,
 ) -> ValidationReport:
     """Validate a workflow from a JSON string."""
@@ -124,4 +134,4 @@ def validate_workflow_json(
             )
         return ValidationReport(is_valid=False, errors=pydantic_errors)
 
-    return validate_workflow(workflow, agent_registry, max_depth)
+    return validate_workflow(workflow, agent_registry, tool_registry, max_depth)
