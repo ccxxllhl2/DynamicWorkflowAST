@@ -9,6 +9,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from agentir.agents.registry import AgentRegistry as AgentReg
 from agentir.artifacts.store import WorkflowArtifactStore
 from agentir.server.config import ServerConfig
 from agentir.server.routes import router as workflow_router
@@ -59,6 +60,15 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             "Tool registry: %d tools discovered from %s",
             len(tool_registry.tools),
             config.tools_dir.resolve(),
+        )
+
+        # Initialize agent registry
+        agent_registry = AgentReg.from_directory(config.agents_dir)
+        app.state.agent_registry = agent_registry
+        logger.info(
+            "Agent registry: %d agents discovered from %s",
+            len(agent_registry.agents),
+            config.agents_dir.resolve(),
         )
 
         yield

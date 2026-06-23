@@ -15,6 +15,10 @@ venv/
 # Generated Artifacts
 artifacts/
 
+# Frontend
+ui/node_modules/
+ui/dist/
+
 # IDE
 .idea/
 .vscode/

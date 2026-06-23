@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from agentir.llm.config import LLMConfig
+from agentir.agents.registry import AgentRegistry as AgentReg
 
 
 def _find_dotenv() -> str | None:
@@ -62,6 +63,7 @@ class ServerConfig:
     debug: bool = False
     artifacts_dir: Path = field(default_factory=lambda: Path.cwd() / "artifacts")
     tools_dir: Path = field(default_factory=lambda: Path.cwd() / "tools")
+    agents_dir: Path = field(default_factory=lambda: Path.cwd() / "agents")
     title: str = "AgentIR Workflow Generator"
     description: str = (
         "Convert natural language descriptions of agent workflows into "
@@ -103,6 +105,26 @@ class ServerConfig:
             else Path.cwd() / "tools"
         )
 
+        agents_dir_str = os.getenv("AGENTIR_AGENTS_DIR", "")
+        agents_dir = (
+            Path(agents_dir_str).resolve()
+            if agents_dir_str
+            else Path.cwd() / "agents"
+        )
+
+        # Load pre-defined agents into LLMConfig
+        agent_reg = AgentReg.from_directory(agents_dir)
+        if agent_reg.agents:
+            if not llm_config.default_agent_model:
+                llm_config.default_agent_model = llm_config.model
+            for name, ag in agent_reg.agents.items():
+                llm_config.set_agent(
+                    agent_name=name,
+                    model=ag.model or llm_config.default_agent_model,
+                    instruction=ag.instruction,
+                    temperature=ag.temperature,
+                )
+
         return cls(
             llm=llm_config,
             host=str(overrides.get("host", host)),
@@ -110,6 +132,7 @@ class ServerConfig:
             debug=bool(overrides.get("debug", debug)),
             artifacts_dir=Path(overrides.get("artifacts_dir", artifacts_dir)),
             tools_dir=Path(overrides.get("tools_dir", tools_dir)),
+            agents_dir=Path(overrides.get("agents_dir", agents_dir)),
             title=str(overrides.get("title", "AgentIR Workflow Generator")),
         )
 

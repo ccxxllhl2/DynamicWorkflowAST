@@ -8,7 +8,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from agentir.artifacts.runner import WorkflowRunner
+from agentir.agents.registry import AgentRegistry as AgentReg
+from agentir.artifacts.run_store import RunHistoryStore
+from agentir.artifacts.runner import WorkflowRunner, _extract_node_logs
 from agentir.artifacts.store import WorkflowArtifactStore
 from agentir.compiler.adk import ADKCompiler
 from agentir.llm.config import AgentConfig, LLMConfig
@@ -17,8 +19,12 @@ from agentir.server.config import ServerConfig
 from agentir.server.models import (
     AgentConfigOverride,
     HealthResponse,
+    NodeLogEntryModel,
     PlanResultInfo,
+    RunHistoryResponse,
+    RunRecordModel,
     ValidationReportInfo,
+    WorkflowDetailResponse,
     WorkflowGenerateRequest,
     WorkflowGenerateResponse,
     WorkflowGenerateOptions,
@@ -50,6 +56,19 @@ def get_artifact_store(request: Request) -> WorkflowArtifactStore:
 def get_tool_registry(request: Request) -> ToolRegistry:
     """Retrieve the tool registry from application state."""
     return request.app.state.tool_registry  # type: ignore[no-any-return]
+
+
+def get_agent_registry(request: Request) -> AgentReg:
+    """Retrieve the agent registry from application state."""
+    return request.app.state.agent_registry  # type: ignore[no-any-return]
+
+
+def get_run_store(request: Request) -> RunHistoryStore:
+    """Retrieve (or lazily create) the run history store."""
+    if not hasattr(request.app.state, "run_store"):
+        config: ServerConfig = request.app.state.config
+        request.app.state.run_store = RunHistoryStore(config.artifacts_dir)
+    return request.app.state.run_store  # type: ignore[no-any-return]
 
 
 # ---- Helpers ----
@@ -159,6 +178,7 @@ def _build_list_item(record) -> WorkflowListItem:
 def health_check(
     config: Annotated[ServerConfig, Depends(get_server_config)],
     tools: Annotated[ToolRegistry, Depends(get_tool_registry)],
+    agents: Annotated[AgentReg, Depends(get_agent_registry)],
 ) -> HealthResponse:
     """Check if the server is running and LLM configuration status."""
     return HealthResponse(
@@ -170,6 +190,7 @@ def health_check(
         api_key_configured=bool(config.llm.api_key),
         artifacts_dir=str(config.artifacts_dir.resolve()),
         tools_count=len(tools.tools),
+        agents_count=len(agents.agents),
     )
 
 
@@ -197,6 +218,30 @@ def list_tools(
     return result
 
 
+# ---- List Agents ----
+
+@router.get(
+    "/agents",
+    summary="List pre-defined agents",
+    description="Returns all agents discovered in the agents/ directory with their instructions.",
+)
+def list_agents(
+    agents: Annotated[AgentReg, Depends(get_agent_registry)],
+) -> list[dict]:
+    """List all registered agents with their metadata."""
+    result = []
+    for name in agents.list_names():
+        ag = agents.get(name)
+        if ag:
+            result.append({
+                "name": ag.name,
+                "instruction": ag.instruction,
+                "model": ag.model,
+                "temperature": ag.temperature,
+            })
+    return result
+
+
 # ---- Core Endpoint: Generate Workflow ----
 
 @router.post(
@@ -220,6 +265,7 @@ def generate_workflow(
     config: Annotated[ServerConfig, Depends(get_server_config)],
     store: Annotated[WorkflowArtifactStore, Depends(get_artifact_store)],
     tools: Annotated[ToolRegistry, Depends(get_tool_registry)],
+    agents: Annotated[AgentReg, Depends(get_agent_registry)],
 ) -> WorkflowGenerateResponse:
     """Generate an ADK workflow from a natural language description, and persist it.
 
@@ -233,7 +279,11 @@ def generate_workflow(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    result = planner.plan(body.requirement, available_tools=tools)
+    result = planner.plan(
+        body.requirement,
+        available_agents=agents,
+        available_tools=tools,
+    )
 
     plan_info = _build_plan_result_info(result)
 
@@ -324,6 +374,100 @@ def list_workflows(
     )
 
 
+# ---- Get Workflow Detail ----
+
+@router.get(
+    "/workflows/{workflow_id}",
+    response_model=WorkflowDetailResponse,
+    summary="Get workflow detail with AgentIR JSON",
+    description=(
+        "Returns full workflow metadata plus the AgentIR intermediate representation. "
+        "Use this to render the workflow graph in a frontend."
+    ),
+)
+def get_workflow(
+    workflow_id: str,
+    store: Annotated[WorkflowArtifactStore, Depends(get_artifact_store)],
+) -> WorkflowDetailResponse:
+    """Get a single workflow's full detail."""
+    record = store.get_workflow(workflow_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Workflow '{workflow_id}' not found.",
+        )
+
+    # Load AgentIR JSON from ir/ directory
+    agentir_json = None
+    ir_path = store._root / store.IR_DIR / f"{workflow_id}.json"
+    if ir_path.is_file():
+        try:
+            import json as _json
+            agentir_json = _json.loads(ir_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    return WorkflowDetailResponse(
+        workflow_id=record.workflow_id,
+        name=record.name,
+        description=record.description,
+        requirement=record.requirement,
+        created_at=record.created_at,
+        status=record.status,
+        elapsed_ms=record.elapsed_ms,
+        error=record.error,
+        agentir_json=agentir_json,
+    )
+
+
+# ---- Get Run History ----
+
+@router.get(
+    "/workflows/{workflow_id}/runs",
+    response_model=RunHistoryResponse,
+    summary="Get run history for a workflow",
+    description=(
+        "Returns all execution runs for a workflow, including per-node logs. "
+        "Runs are sorted newest first."
+    ),
+)
+def get_run_history(
+    workflow_id: str,
+    store: Annotated[WorkflowArtifactStore, Depends(get_artifact_store)],
+    run_store: Annotated[RunHistoryStore, Depends(get_run_store)],
+) -> RunHistoryResponse:
+    """Get run history for a workflow."""
+    # Verify workflow exists
+    record = store.get_workflow(workflow_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Workflow '{workflow_id}' not found.",
+        )
+
+    runs = run_store.get_runs(workflow_id)
+    run_models = [
+        RunRecordModel(
+            run_id=r.run_id,
+            workflow_id=r.workflow_id,
+            started_at=r.started_at,
+            finished_at=r.finished_at,
+            elapsed_ms=r.elapsed_ms,
+            success=r.success,
+            exit_code=r.exit_code,
+            node_logs=[
+                NodeLogEntryModel(node=nl.node, kind=nl.kind, event=nl.event, data=nl.data)
+                for nl in r.node_logs
+            ],
+            log_path=r.log_path,
+            error=r.error,
+        )
+        for r in runs
+    ]
+
+    return RunHistoryResponse(workflow_id=workflow_id, runs=run_models)
+
+
 # ---- Run Workflow ----
 
 @router.post(
@@ -344,6 +488,7 @@ def run_workflow(
     body: WorkflowRunRequest,
     config: Annotated[ServerConfig, Depends(get_server_config)],
     store: Annotated[WorkflowArtifactStore, Depends(get_artifact_store)],
+    run_store: Annotated[RunHistoryStore, Depends(get_run_store)],
 ) -> WorkflowRunResponse:
     """Execute a previously generated workflow by ID."""
     # Look up the workflow
@@ -387,12 +532,35 @@ def run_workflow(
     except ValueError:
         pass
 
+    # Persist run history
+    node_log_dicts: list[dict[str, str]] = [
+        {"node": nl.node, "kind": nl.kind, "event": nl.event, "data": nl.data}
+        for nl in result.node_logs
+    ]
+    run_store.save_run(
+        workflow_id=workflow_id,
+        started_at=result.started_at,
+        finished_at=result.finished_at,
+        elapsed_ms=result.elapsed_ms,
+        success=result.success,
+        exit_code=result.exit_code,
+        node_logs=node_log_dicts,
+        log_path=log_path_rel,
+        error=error_msg,
+    )
+
+    node_log_models = [
+        NodeLogEntryModel(node=nl.node, kind=nl.kind, event=nl.event, data=nl.data)
+        for nl in result.node_logs
+    ]
+
     return WorkflowRunResponse(
         success=result.success,
         workflow_id=result.workflow_id,
         exit_code=result.exit_code,
         stdout=result.stdout,
         stderr=result.stderr,
+        node_logs=node_log_models,
         log_path=log_path_rel,
         started_at=result.started_at,
         finished_at=result.finished_at,

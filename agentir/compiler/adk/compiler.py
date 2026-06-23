@@ -465,10 +465,18 @@ def _generate_orchestration_body(
     pad = " " * indent
 
     if isinstance(node, AgentNode):
-        return [f"{pad}_result = await ctx.run_node({node.agent}, _result)"]
+        return [
+            f"{pad}_log_node('{node.agent}', 'agent', 'start', str(_result)[:200])",
+            f"{pad}_result = await ctx.run_node({node.agent}, _result)",
+            f"{pad}_log_node('{node.agent}', 'agent', 'end', str(_result)[:200])",
+        ]
 
     elif isinstance(node, ToolNode):
-        return [f"{pad}_result = await ctx.run_node(tool_{node.tool}, _result)"]
+        return [
+            f"{pad}_log_node('{node.tool}', 'tool', 'start', str(_result)[:200])",
+            f"{pad}_result = await ctx.run_node(tool_{node.tool}, _result)",
+            f"{pad}_log_node('{node.tool}', 'tool', 'end', str(_result)[:200])",
+        ]
 
     elif isinstance(node, SequenceNode):
         lines: list[str] = []
@@ -662,6 +670,12 @@ def _generate_dynamic_workflow_code(
     lines.append("@node(rerun_on_resume=True)")
     lines.append("async def main_workflow(ctx: Context):")
     lines.append(f'    """{wf_desc}"""')
+    lines.append("    import json as _json")
+    lines.append("    def _log_node(name, kind, event, data=None):")
+    lines.append("        entry = {'node': name, 'type': kind, 'event': event}")
+    lines.append("        if data is not None:")
+    lines.append("            entry['data'] = data")
+    lines.append("        print(_json.dumps(entry, ensure_ascii=False), flush=True)")
     lines.append("    _result = None  # initial input to the first node")
     if body_code:
         lines.extend(body_code)

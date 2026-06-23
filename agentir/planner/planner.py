@@ -25,6 +25,7 @@ from agentir.ir.nodes import (
 from agentir.validator.validator import validate_workflow_dict, ValidationReport
 from agentir.llm.config import LLMConfig
 from agentir.llm.client import create_llm_callable
+from agentir.agents.registry import AgentRegistry as AgentReg
 from agentir.tools.registry import ToolRegistry
 
 
@@ -107,7 +108,8 @@ Use this when the user mentions a specific capability like "search", "calculate"
 - Nodes can be nested arbitrarily (any node can contain any other node)
 - Always use a "sequence" as the top-level root node for multi-step workflows
 - agent names should be lowercase_snake_case
-- tool names must exactly match the available tools listed above
+{agent_context}
+- tool names must exactly match the available tools listed above (if any)
 - Every "sequence" must have at least 1 step
 - Every "parallel" must have at least 2 branches (or 1 if the user insists)
 - "condition" must have a non-empty expression and both branches
@@ -224,19 +226,21 @@ class Planner:
     def plan(
         self,
         description: str,
+        available_agents: AgentReg | None = None,
         available_tools: ToolRegistry | None = None,
     ) -> PlanResult:
         """Plan a workflow from a natural language description.
 
         Args:
             description: Natural language description of the desired workflow.
+            available_agents: Optional registry of pre-defined agents.
             available_tools: Optional registry of available user-defined tools.
 
         Returns:
             PlanResult containing the validated WorkflowDefinition or error details.
         """
         errors: list[str] = []
-        prompt = self._build_prompt(description, available_tools)
+        prompt = self._build_prompt(description, available_agents, available_tools)
 
         for attempt in range(self.max_retries + 1):
             # Call LLM
@@ -326,14 +330,35 @@ class Planner:
             enhanced_description += "\n\nAvailable agents: " + ", ".join(available_agents)
         if constraints:
             enhanced_description += f"\n\nAdditional constraints: {constraints}"
-        return self.plan(enhanced_description, available_tools=available_tools)
+        return self.plan(
+            enhanced_description,
+            available_tools=available_tools,
+        )
 
     # ---- Private Methods ----
 
     def _build_prompt(
-        self, description: str, available_tools: ToolRegistry | None = None
+        self,
+        description: str,
+        available_agents: AgentReg | None = None,
+        available_tools: ToolRegistry | None = None,
     ) -> str:
         """Build the full LLM prompt from the NL description."""
+        # Build agent context
+        if available_agents is not None and available_agents.agents:
+            agent_ctx = available_agents.to_prompt_context()
+            agent_block = (
+                "\n## Pre-defined Agents\n\n"
+                "You SHOULD use these pre-defined agents when they fit the workflow "
+                "description. Use their exact names in `agent` fields:\n\n"
+                f"{agent_ctx}\n"
+            )
+        else:
+            agent_block = (
+                "\n(No pre-defined agents. Create agent names freely as "
+                "lowercase_snake_case.)"
+            )
+
         # Build tool context
         if available_tools is not None and available_tools.tools:
             tool_list = available_tools.to_prompt_context()
@@ -348,6 +373,7 @@ class Planner:
 
         # Use replace() instead of format() to avoid JSON brace conflicts
         prompt = _SYSTEM_PROMPT.replace("{tool_context}", tool_ctx)
+        prompt = prompt.replace("{agent_context}", agent_block)
         return prompt + "\n\n" + _USER_PROMPT_TEMPLATE.format(
             description=description
         )
@@ -357,10 +383,13 @@ class Planner:
     ) -> str:
         """Build a retry prompt with error feedback."""
         error_text = "\n".join(f"- {e}" for e in errors)
-        # Use empty tool context for error prompts (tools don't matter on retry)
         sys_prompt = _SYSTEM_PROMPT.replace(
             "{tool_context}",
             "\n(No custom tools are currently available. Only use agent nodes.)",
+        )
+        sys_prompt = sys_prompt.replace(
+            "{agent_context}",
+            "\n(No pre-defined agents. Create agent names freely as lowercase_snake_case.)",
         )
         return (
             sys_prompt

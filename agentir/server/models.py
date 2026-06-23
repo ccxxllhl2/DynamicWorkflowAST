@@ -192,6 +192,15 @@ class WorkflowListResponse(BaseModel):
 
 # ---- Response: Run ----
 
+class NodeLogEntryModel(BaseModel):
+    """A single node-level log entry from workflow execution."""
+
+    node: str = Field("", description="Node name (agent or tool).")
+    kind: str = Field("", description="Node kind: 'agent' or 'tool'.")
+    event: str = Field("", description="Event type: 'start' or 'end'.")
+    data: str = Field("", description="Input/output snapshot (truncated to 200 chars).")
+
+
 class WorkflowRunResponse(BaseModel):
     """Result of executing a workflow."""
 
@@ -203,6 +212,10 @@ class WorkflowRunResponse(BaseModel):
     exit_code: int = Field(-1, description="Process exit code.")
     stdout: str = Field("", description="Standard output from the workflow.")
     stderr: str = Field("", description="Standard error from the workflow.")
+    node_logs: list[NodeLogEntryModel] = Field(
+        default_factory=list,
+        description="Per-node execution log entries (agent/tool start/end).",
+    )
     log_path: str = Field("", description="Relative path to the execution log file.")
     started_at: str = Field("", description="ISO 8601 start time.")
     finished_at: str = Field("", description="ISO 8601 finish time.")
@@ -210,6 +223,52 @@ class WorkflowRunResponse(BaseModel):
     errors: list[str] = Field(
         default_factory=list,
         description="Execution errors, if any.",
+    )
+
+
+# ---- Response: Workflow Detail ----
+
+class WorkflowDetailResponse(BaseModel):
+    """Full detail for a single workflow, including AgentIR JSON."""
+
+    workflow_id: str = Field(..., description="Unique workflow ID.")
+    name: str = Field("", description="Workflow name.")
+    description: str = Field("", description="Workflow description.")
+    requirement: str = Field("", description="Original NL requirement.")
+    created_at: str = Field("", description="ISO 8601 creation timestamp.")
+    status: str = Field("generated", description="Current status.")
+    elapsed_ms: float = Field(0.0, description="Generation time in ms.")
+    error: str = Field("", description="Error message if status is 'failed'.")
+    agentir_json: dict[str, Any] | None = Field(
+        None, description="The AgentIR workflow definition as JSON."
+    )
+
+
+# ---- Response: Run History ----
+
+class RunRecordModel(BaseModel):
+    """A single run record in the history."""
+
+    run_id: str = Field(..., description="Unique run ID.")
+    workflow_id: str = Field(..., description="Workflow ID.")
+    started_at: str = Field("", description="ISO 8601 start time.")
+    finished_at: str = Field("", description="ISO 8601 finish time.")
+    elapsed_ms: float = Field(0.0, description="Execution time in ms.")
+    success: bool = Field(False, description="Whether execution succeeded.")
+    exit_code: int = Field(-1, description="Process exit code.")
+    node_logs: list[NodeLogEntryModel] = Field(
+        default_factory=list, description="Per-node logs."
+    )
+    log_path: str = Field("", description="Relative log file path.")
+    error: str = Field("", description="Error message if failed.")
+
+
+class RunHistoryResponse(BaseModel):
+    """Run history for a single workflow."""
+
+    workflow_id: str = Field(..., description="Workflow ID.")
+    runs: list[RunRecordModel] = Field(
+        default_factory=list, description="All run records, newest first."
     )
 
 
@@ -234,4 +293,8 @@ class HealthResponse(BaseModel):
     tools_count: int = Field(
         0,
         description="Number of user-defined tools discovered.",
+    )
+    agents_count: int = Field(
+        0,
+        description="Number of pre-defined agents discovered.",
     )

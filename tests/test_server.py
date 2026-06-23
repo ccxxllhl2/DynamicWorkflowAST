@@ -35,6 +35,13 @@ def temp_tools_dir():
 
 
 @pytest.fixture
+def temp_agents_dir():
+    """Create a temporary agents directory."""
+    with tempfile.TemporaryDirectory(prefix="agentir_agents_") as tmp:
+        yield Path(tmp)
+
+
+@pytest.fixture
 def mock_planner_success(monkeypatch):
     """Monkeypatch Planner.plan to return a successful result."""
     from agentir.ir.models import WorkflowDefinition
@@ -59,7 +66,7 @@ def mock_planner_success(monkeypatch):
         errors=[],
     )
 
-    def mock_plan(self, description: str, available_tools=None) -> PlanResult:
+    def mock_plan(self, description: str, available_agents=None, available_tools=None) -> PlanResult:
         return result
 
     monkeypatch.setattr("agentir.planner.Planner.plan", mock_plan)
@@ -77,7 +84,7 @@ def mock_planner_failure(monkeypatch):
         errors=["JSON parse error", "Validation failed"],
     )
 
-    def mock_plan(self, description: str, available_tools=None) -> PlanResult:
+    def mock_plan(self, description: str, available_agents=None, available_tools=None) -> PlanResult:
         return result
 
     monkeypatch.setattr("agentir.planner.Planner.plan", mock_plan)
@@ -85,20 +92,24 @@ def mock_planner_failure(monkeypatch):
 
 
 @pytest.fixture
-def client(mock_llm_env, temp_artifacts_dir, temp_tools_dir):
-    """Create a TestClient for the app with temp artifacts and tools directories."""
+def client(mock_llm_env, temp_artifacts_dir, temp_tools_dir, temp_agents_dir):
+    """Create a TestClient for the app with temp artifacts, tools, and agents directories."""
     from agentir.server.main import create_app
     from agentir.server.config import ServerConfig
     from agentir.tools.registry import ToolRegistry
+    from agentir.agents.registry import AgentRegistry as AgentReg
 
     config = ServerConfig.from_env(
         artifacts_dir=temp_artifacts_dir,
         tools_dir=temp_tools_dir,
+        agents_dir=temp_agents_dir,
     )
     app = create_app(config)
-    # Ensure tool registry is on app state (it's set in lifespan, but we bypass it in tests)
+    # Ensure registries are on app state (they're set in lifespan, but we bypass it in tests)
     if not hasattr(app.state, "tool_registry"):
         app.state.tool_registry = ToolRegistry.from_directory(temp_tools_dir)
+    if not hasattr(app.state, "agent_registry"):
+        app.state.agent_registry = AgentReg.from_directory(temp_agents_dir)
     return TestClient(app)
 
 
@@ -117,6 +128,7 @@ class TestHealth:
         assert data["api_key_configured"] is True
         assert data["artifacts_dir"] == str(temp_artifacts_dir.resolve())
         assert "tools_count" in data
+        assert "agents_count" in data
 
     def test_health_provider_visible(self, client):
         response = client.get("/api/v1/health")
@@ -127,8 +139,9 @@ class TestHealth:
         assert "base_url" in data
         assert "artifacts_dir" in data
         assert "tools_count" in data
+        assert "agents_count" in data
 
-    def test_health_no_api_key_shows_false(self, monkeypatch, temp_artifacts_dir, temp_tools_dir):
+    def test_health_no_api_key_shows_false(self, monkeypatch, temp_artifacts_dir, temp_tools_dir, temp_agents_dir):
         monkeypatch.setenv("AGENTIR_LLM_PROVIDER", "deepseek")
         monkeypatch.setenv("DEEPSEEK_API_KEY", "")
         monkeypatch.setenv("AGENTIR_LLM_API_KEY", "")
@@ -136,14 +149,18 @@ class TestHealth:
         from agentir.server.main import create_app
         from agentir.server.config import ServerConfig
         from agentir.tools.registry import ToolRegistry
+        from agentir.agents.registry import AgentRegistry as AgentReg
 
         config = ServerConfig.from_env(
             artifacts_dir=temp_artifacts_dir,
             tools_dir=temp_tools_dir,
+            agents_dir=temp_agents_dir,
         )
         app = create_app(config)
         if not hasattr(app.state, "tool_registry"):
             app.state.tool_registry = ToolRegistry.from_directory(temp_tools_dir)
+        if not hasattr(app.state, "agent_registry"):
+            app.state.agent_registry = AgentReg.from_directory(temp_agents_dir)
         local_client = TestClient(app)
 
         response = local_client.get("/api/v1/health")
