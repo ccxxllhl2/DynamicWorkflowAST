@@ -52,8 +52,15 @@ The "root" is a workflow node tree built from 6 node types:
 
 ### 1. AgentNode — Invoke a single agent
 ```json
-{ "type": "agent", "agent": "<agent_name>" }
+{
+  "type": "agent",
+  "agent": "<agent_name>",
+  "instruction": "<what this agent should do in this workflow>"
+}
 ```
+The "instruction" field is REQUIRED for every agent node. Write a clear,
+actionable system prompt tailored to the agent's specific role in this workflow.
+Keep it concise (1-3 sentences) focusing on what this agent needs to accomplish.
 
 ### 2. SequenceNode — Run steps one after another (in order)
 ```json
@@ -109,6 +116,8 @@ Use this when the user mentions a specific capability like "search", "calculate"
 - Always use a "sequence" as the top-level root node for multi-step workflows
 - agent names should be lowercase_snake_case
 {agent_context}
+- **Every AgentNode MUST include an "instruction" field** with a clear, specific
+  system prompt tailored to that agent's role in the workflow (1-3 sentences)
 - tool names must exactly match the available tools listed above (if any)
 - Every "sequence" must have at least 1 step
 - Every "parallel" must have at least 2 branches (or 1 if the user insists)

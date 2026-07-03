@@ -14,15 +14,24 @@ from pydantic import BaseModel, Field
 class AgentNode(BaseModel):
     """A single agent invocation node.
 
+    Each agent node can optionally specify an ``instruction`` that serves
+    as the system prompt for this specific invocation. If not provided,
+    the compiler uses the agent's default instruction from the registry.
+
     Example:
         {
             "type": "agent",
-            "agent": "researcher"
+            "agent": "researcher",
+            "instruction": "Research the latest AI trends and summarize key findings"
         }
     """
 
     type: Literal["agent"] = "agent"
     agent: str = Field(..., description="Identifier of the agent to invoke")
+    instruction: str = Field(
+        "",
+        description="Optional system prompt / instruction for this specific agent invocation",
+    )
 
 
 class SequenceNode(BaseModel):
@@ -121,10 +130,40 @@ class ToolNode(BaseModel):
     tool: str = Field(..., description="Name of the tool to invoke (matches registry)")
 
 
+class SubWorkflowNode(BaseModel):
+    """References another workflow as a reusable sub-workflow.
+
+    The referenced workflow is loaded by name from the artifact store
+    and executed inline within the parent workflow.
+
+    Example:
+        {
+            "type": "subworkflow",
+            "workflow": "data_pipeline",
+            "params": {}
+        }
+    """
+
+    type: Literal["subworkflow"] = "subworkflow"
+    workflow: str = Field(
+        ..., description="Name of the sub-workflow to invoke"
+    )
+    params: dict[str, str] = Field(
+        default_factory=dict,
+        description="Optional parameters to pass to the sub-workflow",
+    )
+
+
 # ---- Discriminated Union ----
 
 WorkflowNode = Annotated[
-    AgentNode | SequenceNode | ParallelNode | ConditionNode | LoopNode | ToolNode,
+    AgentNode
+    | SequenceNode
+    | ParallelNode
+    | ConditionNode
+    | LoopNode
+    | ToolNode
+    | SubWorkflowNode,
     Field(discriminator="type"),
 ]
 

@@ -32,6 +32,8 @@ from agentir.server.models import (
     WorkflowListResponse,
     WorkflowRunRequest,
     WorkflowRunResponse,
+    WorkflowUpdateIRRequest,
+    WorkflowUpdateIRResponse,
 )
 from agentir.tools.registry import ToolRegistry
 from agentir.validator import validate_workflow
@@ -149,12 +151,20 @@ def _build_plan_result_info(result) -> PlanResultInfo:
 
 def _build_validation_info(report) -> ValidationReportInfo:
     """Build ValidationReportInfo from a Validator report."""
+    def _to_dict(err) -> dict[str, Any]:
+        """Convert a ValidationError to a dict."""
+        return {
+            "code": getattr(err, "code", ""),
+            "message": str(err),
+            "path": getattr(err, "path", ""),
+        }
+
     return ValidationReportInfo(
         is_valid=report.is_valid,
         error_count=len(report.errors),
         warning_count=len(report.warnings),
-        errors=[str(e) for e in report.errors],
-        warnings=[str(w) for w in report.warnings],
+        errors=[_to_dict(e) for e in report.errors],
+        warnings=[_to_dict(w) for w in report.warnings],
     )
 
 
@@ -240,6 +250,37 @@ def list_agents(
                 "temperature": ag.temperature,
             })
     return result
+
+
+# ---- List Compilers (Phase 5) ----
+
+@router.get(
+    "/compilers",
+    summary="List available compilers",
+    description="Returns all available compiler targets with their metadata.",
+)
+def list_compilers() -> list[dict]:
+    """List all available workflow compilers."""
+    return [
+        {
+            "name": "adk",
+            "label": "Google ADK 2.0",
+            "description": "Google Agent Development Kit — Dynamic Workflows (@node + ctx.run_node)",
+            "status": "stable",
+        },
+        {
+            "name": "langgraph",
+            "label": "LangGraph",
+            "description": "LangChain LangGraph — StateGraph with nodes and edges",
+            "status": "beta",
+        },
+        {
+            "name": "crewai",
+            "label": "CrewAI",
+            "description": "CrewAI — Multi-agent orchestration with Agents, Tasks, and Crews",
+            "status": "beta",
+        },
+    ]
 
 
 # ---- Core Endpoint: Generate Workflow ----
@@ -567,3 +608,124 @@ def run_workflow(
         elapsed_ms=result.elapsed_ms,
         errors=result.errors,
     )
+
+
+# ---- Update IR (Phase 3) ----
+
+@router.put(
+    "/workflows/{workflow_id}/ir",
+    response_model=WorkflowUpdateIRResponse,
+    summary="Update the AgentIR for an existing workflow",
+    description=(
+        "Replace the AgentIR definition of an existing workflow. "
+        "The updated IR is re-validated, re-compiled, and the artifacts are updated.\n\n"
+        "Pipeline: **AgentIR → Validator → ADK Compiler → Save**"
+    ),
+)
+def update_workflow_ir(
+    workflow_id: str,
+    body: WorkflowUpdateIRRequest,
+    config: Annotated[ServerConfig, Depends(get_server_config)],
+    store: Annotated[WorkflowArtifactStore, Depends(get_artifact_store)],
+) -> WorkflowUpdateIRResponse:
+    """Update the AgentIR for an existing workflow."""
+    import time as _time
+
+    t_start = _time.perf_counter()
+
+    # Verify workflow exists
+    record = store.get_workflow(workflow_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Workflow '{workflow_id}' not found.",
+        )
+
+    # ---- Step 1: Validate the AgentIR JSON ----
+    from agentir.validator import validate_workflow_dict
+
+    report = validate_workflow_dict(body.agentir_json)
+    validation_info = _build_validation_info(report)
+
+    if not report.is_valid:
+        elapsed = (_time.perf_counter() - t_start) * 1000.0
+        return WorkflowUpdateIRResponse(
+            workflow_id=workflow_id,
+            success=False,
+            agentir_json=body.agentir_json,
+            validation_report=validation_info,
+            elapsed_ms=round(elapsed, 1),
+        )
+
+    # ---- Step 2: Build WorkflowDefinition from dict ----
+    from agentir.ir.schema import workflow_from_dict
+
+    try:
+        workflow = workflow_from_dict(body.agentir_json)
+    except Exception as e:
+        elapsed = (_time.perf_counter() - t_start) * 1000.0
+        return WorkflowUpdateIRResponse(
+            workflow_id=workflow_id,
+            success=False,
+            agentir_json=body.agentir_json,
+            validation_report=validation_info,
+            compilation_errors=[f"Failed to parse AgentIR: {e}"],
+            elapsed_ms=round(elapsed, 1),
+        )
+
+    # ---- Step 3: Save updated IR ----
+    store.update_workflow_ir(workflow_id, body.agentir_json)
+
+    # ---- Step 4: Re-compile ----
+    agent_configs = config.llm.agent_configs if config.llm.agent_configs else None
+    compiler_result = ADKCompiler().compile(
+        workflow,
+        agent_configs=agent_configs,
+        tools_dir=str(config.tools_dir),
+    )
+
+    elapsed = (_time.perf_counter() - t_start) * 1000.0
+
+    if compiler_result.success and compiler_result.source_code:
+        store.update_workflow_source(workflow_id, compiler_result.source_code)
+
+    return WorkflowUpdateIRResponse(
+        workflow_id=workflow_id,
+        success=compiler_result.success,
+        agentir_json=body.agentir_json,
+        validation_report=validation_info,
+        adk_source_code=compiler_result.source_code if compiler_result.success else None,
+        compilation_errors=compiler_result.errors if not compiler_result.success else [],
+        elapsed_ms=round(elapsed, 1),
+    )
+
+
+# ---- Validate IR only (Phase 3) ----
+
+@router.post(
+    "/workflows/{workflow_id}/ir/validate",
+    response_model=ValidationReportInfo,
+    summary="Validate an AgentIR definition without compiling",
+    description=(
+        "Validate the AgentIR JSON without re-compiling. "
+        "Useful for fast feedback during editing."
+    ),
+)
+def validate_workflow_ir(
+    workflow_id: str,
+    body: WorkflowUpdateIRRequest,
+    store: Annotated[WorkflowArtifactStore, Depends(get_artifact_store)],
+) -> ValidationReportInfo:
+    """Validate an AgentIR definition only (no compilation)."""
+    # Verify workflow exists
+    record = store.get_workflow(workflow_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Workflow '{workflow_id}' not found.",
+        )
+
+    from agentir.validator import validate_workflow_dict
+
+    report = validate_workflow_dict(body.agentir_json)
+    return _build_validation_info(report)

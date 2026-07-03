@@ -21,7 +21,7 @@ class TestAgentNode:
     def test_agent_node_serialization(self):
         node = AgentNode(agent="researcher")
         data = node.model_dump()
-        assert data == {"type": "agent", "agent": "researcher"}
+        assert data == {"type": "agent", "agent": "researcher", "instruction": ""}
 
     def test_agent_node_deserialization(self):
         node = AgentNode.model_validate({"type": "agent", "agent": "researcher"})

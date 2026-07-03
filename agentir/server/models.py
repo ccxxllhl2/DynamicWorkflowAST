@@ -272,6 +272,49 @@ class RunHistoryResponse(BaseModel):
     )
 
 
+# ---- Request: Update IR ----
+
+class WorkflowUpdateIRRequest(BaseModel):
+    """Request to update the AgentIR for an existing workflow.
+
+    The updated AgentIR is re-validated, re-compiled, and saved.
+    """
+
+    agentir_json: dict[str, Any] = Field(
+        ...,
+        description="The modified AgentIR workflow definition as JSON.",
+    )
+
+
+# ---- Response: Update IR ----
+
+class WorkflowUpdateIRResponse(BaseModel):
+    """Response after updating an AgentIR definition."""
+
+    workflow_id: str = Field(..., description="Workflow ID that was updated.")
+    success: bool = Field(..., description="Whether validation and compilation succeeded.")
+    agentir_json: dict[str, Any] | None = Field(
+        None,
+        description="The saved AgentIR workflow definition.",
+    )
+    validation_report: ValidationReportInfo = Field(
+        default_factory=ValidationReportInfo,
+        description="Validation report for the updated AgentIR.",
+    )
+    adk_source_code: str | None = Field(
+        None,
+        description="The re-compiled ADK Python source code.",
+    )
+    compilation_errors: list[str] = Field(
+        default_factory=list,
+        description="Compilation errors, if any.",
+    )
+    elapsed_ms: float = Field(
+        0.0,
+        description="Processing time in milliseconds.",
+    )
+
+
 # ---- Response: Health ----
 
 class HealthResponse(BaseModel):

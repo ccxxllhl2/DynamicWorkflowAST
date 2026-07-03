@@ -104,7 +104,7 @@ export interface ToolInfo {
 
 // ---- AgentIR Schema types ----
 
-export type IRNode = AgentIRNode | SequenceIRNode | ParallelIRNode | ConditionIRNode | LoopIRNode | ToolIRNode;
+export type IRNode = AgentIRNode | SequenceIRNode | ParallelIRNode | ConditionIRNode | LoopIRNode | ToolIRNode | SubWorkflowIRNode;
 
 export interface AgentIR {
   name: string;
@@ -116,6 +116,7 @@ export interface AgentIR {
 export interface AgentIRNode {
   type: "agent";
   agent: string;
+  instruction?: string;
 }
 
 export interface SequenceIRNode {
@@ -146,6 +147,12 @@ export interface ToolIRNode {
   tool: string;
 }
 
+export interface SubWorkflowIRNode {
+  type: "subworkflow";
+  workflow: string;
+  params?: Record<string, string>;
+}
+
 // ---- ReactFlow types ----
 
 export interface FlowNode {
@@ -155,7 +162,11 @@ export interface FlowNode {
   data: {
     label: string;
     kind: string;
+    irPath?: (string | number)[];  // Path to locate this node in the AgentIR tree
+    irNode?: IRNode;               // Reference to the raw IR node (for leaf nodes)
   };
+  width?: number;
+  height?: number;
 }
 
 export interface FlowEdge {
@@ -165,4 +176,38 @@ export interface FlowEdge {
   label?: string;
   animated?: boolean;
   style?: Record<string, string | number>;
+}
+
+// ---- Phase 3: IR Update types ----
+
+export interface WorkflowUpdateIRRequest {
+  agentir_json: Record<string, unknown>;
+}
+
+export interface WorkflowUpdateIRResponse {
+  workflow_id: string;
+  success: boolean;
+  agentir_json: Record<string, unknown> | null;
+  validation_report: {
+    is_valid: boolean;
+    error_count: number;
+    warning_count: number;
+    errors: Record<string, unknown>[];
+    warnings: Record<string, unknown>[];
+  };
+  adk_source_code: string | null;
+  compilation_errors: string[];
+  elapsed_ms: number;
+}
+
+// ---- Phase 3: Editing types ----
+
+export type EditMode = "view" | "edit";
+
+export interface SelectedNode {
+  nodeId: string;
+  irPath: (string | number)[];
+  label: string;
+  kind: string;
+  irNode: IRNode;
 }

@@ -9,6 +9,8 @@ import type {
   WorkflowRunResponse,
   RunHistoryResponse,
   ToolInfo,
+  WorkflowUpdateIRRequest,
+  WorkflowUpdateIRResponse,
 } from "../types";
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -57,4 +59,28 @@ export function getRunHistory(workflowId: string): Promise<RunHistoryResponse> {
 
 export function listTools(): Promise<ToolInfo[]> {
   return request<ToolInfo[]>("/tools");
+}
+
+// ---- Phase 3: IR Update ----
+
+export function updateWorkflowIR(
+  workflowId: string,
+  payload: WorkflowUpdateIRRequest
+): Promise<WorkflowUpdateIRResponse> {
+  return request<WorkflowUpdateIRResponse>(`/workflows/${workflowId}/ir`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function validateWorkflowIR(
+  workflowId: string,
+  payload: WorkflowUpdateIRRequest
+): Promise<WorkflowUpdateIRRequest> {
+  return request<WorkflowUpdateIRRequest>(`/workflows/${workflowId}/ir/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 }

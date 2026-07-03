@@ -47,6 +47,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 }
 .agent-node { border-color: #3b82f6; }
 .tool-node { border-color: #22c55e; border-radius: 4px; }
+.subworkflow-node { border-color: #06b6d4; border-radius: 8px; border-style: dashed; }
 .condition-node { border-color: #f59e0b; transform: rotate(0deg); border-radius: 2px; }
 .loop-node { border-color: #a855f7; border-radius: 50px; }
 .helper-node { border-color: #475569; background: #0f172a; font-size: 11px; min-width: 60px; padding: 6px 10px; }
@@ -88,6 +89,10 @@ button:hover { background: #334155; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-primary { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
 .btn-primary:hover { background: #2563eb; }
+.btn-outline { background: transparent; border-color: #475569; color: #94a3b8; }
+.btn-outline:hover { background: #334155; color: #e2e8f0; }
+.btn-icon { padding: 6px 10px; font-size: 16px; line-height: 1; min-width: 36px; text-align: center; }
+.btn-icon:disabled { opacity: 0.3; }
 
 /* === Modal === */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 9999; }
@@ -98,3 +103,95 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .error { color: #f87171; font-size: 12px; margin-top: 4px; }
 .hint { color: #64748b; font-size: 13px; }
+
+/* === Header Actions === */
+.header-actions { display: flex; gap: 6px; align-items: center; }
+
+.btn-save { background: #059669; border-color: #059669; }
+.btn-save:hover { background: #10b981; }
+.btn-save:disabled { background: #065f46; opacity: 0.7; }
+
+/* === Save Error Bar === */
+.save-error-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 16px;
+  background: #7f1d1d; color: #fca5a5; font-size: 13px;
+}
+.save-error-bar button { background: none; border: none; color: #fca5a5; cursor: pointer; font-size: 14px; padding: 2px 6px; }
+
+/* === Graph with Panel Layout === */
+.graph-with-panel { display: flex; flex: 1; min-height: 0; }
+.graph-with-panel .graph-section { flex: 1; min-height: 0; }
+
+/* === Property Panel === */
+.property-panel {
+  width: 280px; background: #1e293b; border-left: 1px solid #334155;
+  overflow-y: auto; display: flex; flex-direction: column;
+}
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid #334155;
+}
+.panel-header h3 { font-size: 13px; text-transform: uppercase; color: #94a3b8; }
+.btn-close {
+  background: none; border: none; color: #94a3b8; cursor: pointer;
+  font-size: 14px; padding: 2px 6px;
+}
+.btn-close:hover { color: #f87171; }
+
+.panel-body { padding: 16px; flex: 1; }
+.panel-empty { padding: 24px 16px; color: #64748b; font-size: 13px; text-align: center; }
+
+.prop-section { margin-bottom: 16px; }
+.prop-label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; }
+.prop-kind {
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 600;
+}
+.kind-agent { background: #1e3a5f; color: #93c5fd; }
+.kind-tool { background: #14532d; color: #86efac; }
+.kind-subworkflow { background: #164e63; color: #67e8f9; }
+.kind-condition { background: #713f12; color: #fde68a; }
+.kind-loop { background: #581c87; color: #d8b4fe; }
+
+.prop-input {
+  width: 100%; padding: 8px 10px; border: 1px solid #475569; border-radius: 6px;
+  background: #0f172a; color: #e2e8f0; font-size: 13px;
+}
+.prop-input:focus { outline: none; border-color: #3b82f6; }
+.prop-textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+
+.child-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.btn-add-child {
+  padding: 4px 10px; font-size: 11px; border: 1px solid #475569;
+  border-radius: 4px; background: #0f172a; color: #94a3b8; cursor: pointer;
+}
+.btn-add-child:hover { background: #334155; color: #e2e8f0; }
+
+.prop-actions { margin-top: 20px; display: flex; flex-direction: column; gap: 8px; }
+.btn-save-prop { width: 100%; }
+.btn-delete {
+  width: 100%; padding: 8px 16px; border: 1px solid #7f1d1d; border-radius: 6px;
+  background: transparent; color: #f87171; cursor: pointer; font-size: 13px;
+}
+.btn-delete:hover { background: #7f1d1d; color: #fca5a5; }
+
+/* === Selected Node Highlight === */
+.selected-node {
+  box-shadow: 0 0 0 3px #f59e0b !important;
+  border-color: #f59e0b !important;
+}
+
+/* === IR Diff Modal === */
+.diff-modal { width: 800px; max-width: 95vw; max-height: 80vh; display: flex; flex-direction: column; }
+.diff-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.diff-header h3 { margin: 0; }
+.diff-body { display: flex; gap: 12px; flex: 1; overflow: hidden; }
+.diff-pane { flex: 1; overflow: auto; }
+.diff-pane h4 { font-size: 12px; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; }
+.diff-pane pre {
+  background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+  padding: 12px; font-size: 11px; line-height: 1.5;
+  overflow: auto; max-height: 50vh; white-space: pre; color: #e2e8f0;
+  font-family: "SF Mono", "Fira Code", monospace;
+}

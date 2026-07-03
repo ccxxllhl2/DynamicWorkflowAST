@@ -13,11 +13,14 @@ from agentir.ir.models import WorkflowDefinition
 from agentir.ir.schema import workflow_from_dict, workflow_from_json
 from agentir.validator.rules import (
     AgentRegistry,
+    SubWorkflowRegistry,
     ValidationError,
     validate_agent_existence,
     validate_condition_expression,
     validate_max_depth,
     validate_no_empty_containers,
+    validate_no_subworkflow_cycles,
+    validate_subworkflow_existence,
     validate_tool_existence,
 )
 from agentir.tools.registry import ToolRegistry
@@ -50,6 +53,7 @@ def validate_workflow(
     workflow: WorkflowDefinition,
     agent_registry: AgentRegistry | None = None,
     tool_registry: ToolRegistry | None = None,
+    subworkflow_registry: SubWorkflowRegistry | None = None,
     max_depth: int = 20,
 ) -> ValidationReport:
     """Run all validation rules on a workflow.
@@ -58,6 +62,7 @@ def validate_workflow(
         workflow: The workflow to validate.
         agent_registry: Optional registry of available agents.
         tool_registry: Optional registry of available tools.
+        subworkflow_registry: Optional registry of available sub-workflows.
         max_depth: Maximum allowed nesting depth.
 
     Returns:
@@ -77,6 +82,11 @@ def validate_workflow(
     # Tool existence (only if registry is provided)
     if tool_registry is not None:
         errors.extend(validate_tool_existence(workflow, tool_registry))
+
+    # Sub-workflow existence + cycle detection (Phase 4)
+    if subworkflow_registry is not None:
+        errors.extend(validate_subworkflow_existence(workflow, subworkflow_registry))
+        errors.extend(validate_no_subworkflow_cycles(workflow, subworkflow_registry))
 
     return ValidationReport(
         is_valid=len(errors) == 0,

@@ -79,7 +79,7 @@ class TestSerialization:
     def test_node_to_dict(self):
         node = AgentNode(agent="test")
         d = node_to_dict(node)
-        assert d == {"type": "agent", "agent": "test"}
+        assert d == {"type": "agent", "agent": "test", "instruction": ""}
 
     def test_node_to_json(self):
         node = AgentNode(agent="test")

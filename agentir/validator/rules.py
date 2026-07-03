@@ -16,6 +16,7 @@ from agentir.ir.nodes import (
     LoopNode,
     ParallelNode,
     SequenceNode,
+    SubWorkflowNode,
     ToolNode,
     WorkflowNode,
 )
@@ -49,6 +50,31 @@ class AgentRegistry:
         return name in self.agents
 
 
+# ---- SubWorkflow Registry (Phase 4) ----
+
+@dataclass
+class SubWorkflowRegistry:
+    """Registry of available sub-workflow definitions.
+
+    Used to resolve SubWorkflowNode references during validation.
+    """
+
+    workflows: dict[str, WorkflowDefinition] = field(default_factory=dict)
+
+    @classmethod
+    def empty(cls) -> "SubWorkflowRegistry":
+        return cls()
+
+    def has(self, name: str) -> bool:
+        return name in self.workflows
+
+    def get(self, name: str) -> WorkflowDefinition | None:
+        return self.workflows.get(name)
+
+    def list_names(self) -> list[str]:
+        return sorted(self.workflows.keys())
+
+
 # ---- Built-in Rules ----
 
 def _walk_nodes(
@@ -71,8 +97,8 @@ def _walk_nodes(
         errors.extend(_walk_nodes(node.false_branch, visitor, f"{path}.false_branch"))
     elif isinstance(node, LoopNode):
         errors.extend(_walk_nodes(node.body, visitor, f"{path}.body"))
-    elif isinstance(node, ToolNode):
-        pass  # Leaf node, no children
+    elif isinstance(node, (ToolNode, AgentNode, SubWorkflowNode)):
+        pass  # Leaf nodes, no children
 
     return errors
 
@@ -127,7 +153,6 @@ def validate_condition_expression(
     workflow: WorkflowDefinition,
 ) -> list[ValidationError]:
     """Validate that condition expressions are non-empty."""
-    errors: list[ValidationError] = []
 
     def check(node: WorkflowNode, path: str) -> list[ValidationError]:
         if isinstance(node, ConditionNode) and not node.expression.strip():
@@ -168,7 +193,7 @@ def validate_max_depth(
     """Validate that workflow nesting does not exceed max_depth."""
 
     def measure_depth(node: WorkflowNode) -> int:
-        if isinstance(node, (AgentNode, ToolNode)):
+        if isinstance(node, (AgentNode, ToolNode, SubWorkflowNode)):
             return 1
         if isinstance(node, SequenceNode):
             return 1 + max((measure_depth(s) for s in node.steps), default=0)
@@ -189,3 +214,97 @@ def validate_max_depth(
             )
         ]
     return []
+
+
+# ---- Phase 4: SubWorkflow Rules ----
+
+def validate_subworkflow_existence(
+    workflow: WorkflowDefinition,
+    registry: SubWorkflowRegistry,
+) -> list[ValidationError]:
+    """Validate that all referenced sub-workflows exist in the registry."""
+
+    def check(node: WorkflowNode, path: str) -> list[ValidationError]:
+        if isinstance(node, SubWorkflowNode) and not registry.has(node.workflow):
+            return [
+                ValidationError(
+                    code="SUBWORKFLOW_NOT_FOUND",
+                    message=f"Sub-workflow '{node.workflow}' is not registered",
+                    path=path,
+                )
+            ]
+        return []
+
+    return _walk_nodes(workflow.root, check)
+
+
+def validate_no_subworkflow_cycles(
+    workflow: WorkflowDefinition,
+    registry: SubWorkflowRegistry,
+) -> list[ValidationError]:
+    """Detect cycles in sub-workflow references.
+
+    Traverses the workflow tree and follows sub-workflow references.
+    A cycle exists when a workflow references itself (directly or indirectly).
+    """
+    errors: list[ValidationError] = []
+
+    def _collect_refs(node: WorkflowNode) -> list[str]:
+        """Collect all sub-workflow references from a node tree."""
+        refs: list[str] = []
+
+        def _collect(n: WorkflowNode) -> None:
+            if isinstance(n, SubWorkflowNode):
+                refs.append(n.workflow)
+            elif isinstance(n, SequenceNode):
+                for step in n.steps:
+                    _collect(step)
+            elif isinstance(n, ParallelNode):
+                for branch in n.branches:
+                    _collect(branch)
+            elif isinstance(n, ConditionNode):
+                _collect(n.true_branch)
+                _collect(n.false_branch)
+            elif isinstance(n, LoopNode):
+                _collect(n.body)
+
+        _collect(node)
+        return refs
+
+    def _detect(
+        wf_name: str,
+        visited: set[str],
+        stack: list[str],
+    ) -> list[ValidationError]:
+        """DFS cycle detection across sub-workflow references."""
+        result: list[ValidationError] = []
+        if wf_name in stack:
+            cycle = " → ".join(stack[stack.index(wf_name):] + [wf_name])
+            return [
+                ValidationError(
+                    code="SUBWORKFLOW_CYCLE",
+                    message=f"Sub-workflow cycle detected: {cycle}",
+                )
+            ]
+        if wf_name in visited:
+            return []
+
+        visited.add(wf_name)
+        stack.append(wf_name)
+
+        sub_wf = registry.get(wf_name)
+        if sub_wf:
+            refs = _collect_refs(sub_wf.root)
+            for ref in refs:
+                result.extend(_detect(ref, visited, list(stack)))
+
+        stack.pop()
+        return result
+
+    # Start detection from the root workflow
+    root_refs = _collect_refs(workflow.root)
+    visited: set[str] = set()
+    for ref in root_refs:
+        errors.extend(_detect(ref, visited, [workflow.name]))
+
+    return errors

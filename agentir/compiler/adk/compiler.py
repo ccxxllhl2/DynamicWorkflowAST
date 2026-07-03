@@ -8,7 +8,8 @@ The compilation process follows the ADK Dynamic Workflows pattern:
     3. Generate a main @node(rerun_on_resume=True) orchestration function
        that uses ctx.run_node() to invoke agents in sequence/parallel/conditional/loop
     4. Generate sub-@node functions for parallel branches
-    5. Generate the Workflow constructor with a single edge: (START, main_workflow)
+    5. Generate sub-@node functions for SubWorkflow references (Phase 4)
+    6. Generate the Workflow constructor with a single edge: (START, main_workflow)
 
     Reference: https://adk.dev/graphs/dynamic/
 
@@ -19,6 +20,7 @@ Agent configuration injection:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -30,6 +32,7 @@ from agentir.ir.nodes import (
     LoopNode,
     ParallelNode,
     SequenceNode,
+    SubWorkflowNode,
     ToolNode,
     WorkflowNode,
 )
@@ -403,11 +406,35 @@ def _collect_agents(node: WorkflowNode) -> list[str]:
             _walk(n.false_branch)
         elif isinstance(n, LoopNode):
             _walk(n.body)
-        elif isinstance(n, ToolNode):
+        elif isinstance(n, (ToolNode, SubWorkflowNode)):
             pass  # Leaf node, handled separately
 
     _walk(node)
     return result
+
+
+def _collect_agent_instructions(node: WorkflowNode) -> dict[str, str]:
+    """Collect per-node instructions for each agent (first encountered wins)."""
+    instructions: dict[str, str] = {}
+
+    def _walk(n: WorkflowNode) -> None:
+        if isinstance(n, AgentNode):
+            if n.agent not in instructions and n.instruction:
+                instructions[n.agent] = n.instruction
+        elif isinstance(n, SequenceNode):
+            for step in n.steps:
+                _walk(step)
+        elif isinstance(n, ParallelNode):
+            for branch in n.branches:
+                _walk(branch)
+        elif isinstance(n, ConditionNode):
+            _walk(n.true_branch)
+            _walk(n.false_branch)
+        elif isinstance(n, LoopNode):
+            _walk(n.body)
+
+    _walk(node)
+    return instructions
 
 
 def _collect_tools(node: WorkflowNode) -> list[str]:
@@ -431,8 +458,36 @@ def _collect_tools(node: WorkflowNode) -> list[str]:
             _walk(n.false_branch)
         elif isinstance(n, LoopNode):
             _walk(n.body)
-        elif isinstance(n, AgentNode):
+        elif isinstance(n, (AgentNode, SubWorkflowNode)):
             pass  # Not a tool
+
+    _walk(node)
+    return result
+
+
+def _collect_subworkflows(node: WorkflowNode) -> list[str]:
+    """Walk the IR tree and return sub-workflow names in encounter order, deduplicated."""
+    seen: set[str] = set()
+    result: list[str] = []
+
+    def _walk(n: WorkflowNode) -> None:
+        if isinstance(n, SubWorkflowNode):
+            if n.workflow not in seen:
+                seen.add(n.workflow)
+                result.append(n.workflow)
+        elif isinstance(n, SequenceNode):
+            for step in n.steps:
+                _walk(step)
+        elif isinstance(n, ParallelNode):
+            for branch in n.branches:
+                _walk(branch)
+        elif isinstance(n, ConditionNode):
+            _walk(n.true_branch)
+            _walk(n.false_branch)
+        elif isinstance(n, LoopNode):
+            _walk(n.body)
+        elif isinstance(n, (AgentNode, ToolNode)):
+            pass  # Not a sub-workflow
 
     _walk(node)
     return result
@@ -532,6 +587,14 @@ def _generate_orchestration_body(
         )
         return lines
 
+    elif isinstance(node, SubWorkflowNode):
+        func_name = f"sub_workflow_{node.workflow}"
+        return [
+            f"{pad}_log_node('{node.workflow}', 'subworkflow', 'start', str(_result)[:200])",
+            f"{pad}_result = await ctx.run_node({func_name}, _result)",
+            f"{pad}_log_node('{node.workflow}', 'subworkflow', 'end', str(_result)[:200])",
+        ]
+
     return []
 
 
@@ -539,6 +602,7 @@ def _generate_dynamic_workflow_code(
     workflow: WorkflowDefinition,
     agent_configs: dict[str, AgentConfig] | None = None,
     tools_dir: str = "./tools",
+    subworkflow_resolver: "Callable[[str], WorkflowDefinition | None] | None" = None,
     default_model: str = "gemini-2.0-flash",
     default_instruction_template: str = "You are the {agent_name} agent.",
 ) -> str:
@@ -564,9 +628,11 @@ def _generate_dynamic_workflow_code(
     lines.append("# Reference: https://adk.dev/graphs/dynamic/")
     lines.append("")
 
-    # ---- Collect agents, tools & parallel branches ----
+    # ---- Collect agents, tools, subworkflows & parallel branches ----
     agent_names = _collect_agents(workflow.root)
+    agent_instructions = _collect_agent_instructions(workflow.root)
     tool_names = _collect_tools(workflow.root)
+    subworkflow_names = _collect_subworkflows(workflow.root)
     parallel_branches: list[tuple[str, WorkflowNode]] = []
     body_code = _generate_orchestration_body(workflow.root, parallel_branches, indent=4)
 
@@ -597,10 +663,11 @@ def _generate_dynamic_workflow_code(
     for agent_name in agent_names:
         cfg = agent_configs.get(agent_name)
         model = cfg.model if cfg and cfg.model else default_model
+        # Priority: per-node instruction > agent_config > default template
         instruction = (
-            cfg.instruction
-            if cfg and cfg.instruction
-            else default_instruction_template.format(agent_name=agent_name)
+            agent_instructions.get(agent_name)
+            or (cfg.instruction if cfg else "")
+            or default_instruction_template.format(agent_name=agent_name)
         )
         tools = cfg.tools if cfg else []
         temperature = cfg.temperature if cfg else None
@@ -639,6 +706,48 @@ def _generate_dynamic_workflow_code(
                 f"    _input = str(_result) if _result else \"\""
             )
             lines.append(f"    return await _exec_{tool_name}(_input)")
+            lines.append("")
+
+    # ---- SubWorkflow Wrappers (Phase 4) ----
+    if subworkflow_names:
+        lines.append("")
+        lines.append(sep)
+        lines.append("# Sub-Workflow Wrappers (@node functions)")
+        lines.append(sep)
+        lines.append("")
+
+        for swf_name in subworkflow_names:
+            swf_wf = None
+            if subworkflow_resolver:
+                swf_wf = subworkflow_resolver(swf_name)
+
+            if swf_wf:
+                # Recursively compile the sub-workflow
+                swf_agents = _collect_agents(swf_wf.root)
+                swf_body = _generate_orchestration_body(swf_wf.root, [], indent=4)
+                lines.append(f"# Sub-workflow: {swf_name}")
+                lines.append(f"# ({len(swf_agents)} agent(s): {', '.join(swf_agents)})")
+                lines.append("@node")
+                lines.append(
+                    f"async def sub_workflow_{swf_name}(ctx: Context, _result=None):"
+                )
+                lines.append(f'    """Sub-workflow: {swf_name}"""')
+                if swf_body:
+                    lines.extend(swf_body)
+                lines.append("    return _result")
+            else:
+                # Placeholder - the subworkflow is not resolved
+                lines.append(f"# Sub-workflow: {swf_name} (unresolved — placeholder)")
+                lines.append("@node")
+                lines.append(
+                    f"async def sub_workflow_{swf_name}(ctx: Context, _result=None):"
+                )
+                lines.append(f'    """Placeholder for sub-workflow: {swf_name}"""')
+                lines.append(
+                    f'    print("WARNING: Sub-workflow \\"{swf_name}\\" not found. '
+                    f'Using placeholder.")'
+                )
+                lines.append("    return _result")
             lines.append("")
 
     # ---- Parallel Branch Sub-Workflows ----
@@ -731,6 +840,7 @@ class ADKCompiler(BaseCompiler):
         workflow: WorkflowDefinition,
         agent_configs: dict[str, AgentConfig] | None = None,
         tools_dir: str = "./tools",
+        subworkflow_resolver: Callable[[str], WorkflowDefinition | None] | None = None,
         **kwargs: object,
     ) -> CompilationResult:
         """Compile a WorkflowDefinition to ADK 2.0 Dynamic Workflow Python source.
@@ -741,6 +851,8 @@ class ADKCompiler(BaseCompiler):
                 Keys are agent names, values are AgentConfig objects with
                 model, instruction, tools, and temperature.
             tools_dir: Path to the user's tools directory (for import generation).
+            subworkflow_resolver: Optional callback to resolve sub-workflow names
+                to their WorkflowDefinitions. Used by SubWorkflowNode compilation.
             **kwargs: Reserved for future options.
 
         Returns:
@@ -751,6 +863,7 @@ class ADKCompiler(BaseCompiler):
                 workflow,
                 agent_configs=agent_configs,
                 tools_dir=tools_dir,
+                subworkflow_resolver=subworkflow_resolver,
                 default_model=self.default_model,
                 default_instruction_template=self.default_instruction_template,
             )
