@@ -24,6 +24,7 @@ ui/dist/
 .vscode/
 *.swp
 *.swo
+.codebuddy/
 
 # Testing
 .pytest_cache/
